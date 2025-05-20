@@ -5,7 +5,7 @@ import json
 import yaml
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from geopy.geocoders import Nominatim
 
@@ -25,31 +25,47 @@ class GooglePlacesScraper:
         self.request_count = self.load_request_count()
 
     def load_request_count(self) -> int:
-        if os.path.exists(self.STATS_FILE):
-            df = pd.read_csv(self.STATS_FILE)
-            count = df['total_count'].iloc[-1]
-            logger.info(f"Loaded previous request count: {count}")
-            return int(count)
+        if os.path.exists(self.STATS_FILE) and os.path.getsize(self.STATS_FILE) > 0:
+            try:
+                df = pd.read_csv(self.STATS_FILE)
+                count = df['total_count'].iloc[-1]
+                logger.info(f"Loaded previous request count: {count}")
+                return int(count)
+            except pd.errors.EmptyDataError:
+                logger.warning(f"{self.STATS_FILE} is empty. Starting with count = 0.")
+            except Exception as e:
+                logger.exception(f"Error reading {self.STATS_FILE}: {e}")
+        else:
+            logger.info(f"{self.STATS_FILE} does not exist or is empty. Starting fresh.")
         return 0
 
     def save_request_stat(self, endpoint: str):
-        cost = (self.request_count * 17) / 1000
-        row = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "endpoint": endpoint,
-            "request_count": 1,
-            "total_count": self.request_count,
-            "estimated_cost_usd": round(cost, 4)
-        }
+        try:
+            cost = (self.request_count * 17) / 1000
+            row = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "endpoint": endpoint,
+                "request_count": 1,
+                "total_count": self.request_count,
+                "estimated_cost_usd": round(cost, 4)
+            }
 
-        df_new = pd.DataFrame([row])
-        if os.path.exists(self.STATS_FILE):
-            df_existing = pd.read_csv(self.STATS_FILE)
-            df_combined = pd.concat([df_existing, df_new], ignore_index=True)
-        else:
-            df_combined = df_new
-        df_combined.to_csv(self.STATS_FILE, index=False)
-        logger.info(f"Logged API usage: {row}")
+            df_new = pd.DataFrame([row])
+
+            if os.path.exists(self.STATS_FILE) and os.path.getsize(self.STATS_FILE) > 0:
+                try:
+                    df_existing = pd.read_csv(self.STATS_FILE)
+                    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+                except Exception as e:
+                    logger.warning(f"Failed to read existing stats. Overwriting file. Error: {e}")
+                    df_combined = df_new
+            else:
+                df_combined = df_new
+
+            df_combined.to_csv(self.STATS_FILE, index=False)
+            logger.info(f"Logged API usage: {row}")
+        except Exception as e:
+            logger.exception(f"Failed to save request stats: {e}")
 
     def _check_quota(self) -> bool:
         return self.request_count < self.daily_limit
@@ -108,18 +124,21 @@ class GooglePlacesScraper:
         return data.get("result") if data else None
 
     def export_data(self, data: List[Dict], filename: str, format_: str = "csv"):
-        if format_ == "csv":
-            df = pd.DataFrame(data)
-            df.to_csv(filename, index=False)
-        elif format_ == "json":
-            with open(filename, "w") as f:
-                json.dump(data, f, indent=2)
-        elif format_ == "yaml":
-            with open(filename, "w") as f:
-                yaml.dump(data, f, allow_unicode=True)
-        else:
-            raise ValueError(f"Unsupported format: {format_}")
-        logger.info(f"Exported {len(data)} records to {filename}")
+        try:
+            if format_ == "csv":
+                df = pd.DataFrame(data)
+                df.to_csv(filename, index=False)
+            elif format_ == "json":
+                with open(filename, "w") as f:
+                    json.dump(data, f, indent=2)
+            elif format_ == "yaml":
+                with open(filename, "w") as f:
+                    yaml.dump(data, f, allow_unicode=True)
+            else:
+                raise ValueError(f"Unsupported format: {format_}")
+            logger.info(f"Exported {len(data)} records to {filename}")
+        except Exception as e:
+            logger.exception(f"Failed to export data to {filename}: {e}")
 
     @staticmethod
     def resolve_location_input(user_input: str) -> Optional[Dict]:
