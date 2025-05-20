@@ -74,7 +74,7 @@ class GooglePlacesScraper:
             logger.exception(f"Network error: {e}")
             return None
 
-    def search_places(self, location: str, radius: int, type_: str = "school") -> List[Dict]:
+    def search_places(self, location: str, radius: int, type_: str = "school", max_results: Optional[int] = None) -> List[Dict]:
         params = {"location": location, "radius": radius, "type": type_}
         all_results, next_page_token = [], None
 
@@ -87,11 +87,20 @@ class GooglePlacesScraper:
             if not data:
                 break
 
-            all_results.extend(data.get("results", []))
+            results = data.get("results", [])
+            all_results.extend(results)
+
+            # If max_results is set and reached, trim and exit
+            if max_results and len(all_results) >= max_results:
+                all_results = all_results[:max_results]
+                break
+
             next_page_token = data.get("next_page_token")
             if not next_page_token:
                 break
+
         return all_results
+
 
     def get_place_details(self, place_id: str) -> Optional[Dict]:
         params = {"place_id": place_id, "fields": "name,formatted_address,formatted_phone_number,website"}
@@ -127,7 +136,7 @@ class GooglePlacesScraper:
             logger.exception(f"Failed to resolve location: {e}")
         return None
 
-    def run(self, user_location_input: str, radius: int, export_format: str = "csv"):
+    def run(self, user_location_input: str, radius: int, export_format: str = "csv", type_: str = "school", max_results: Optional[int] = None):
         resolved = self.resolve_location_input(user_location_input)
         if not resolved:
             logger.error("Invalid location input.")
@@ -135,7 +144,7 @@ class GooglePlacesScraper:
 
         logger.info(f"Resolved Location: {resolved['display_name']}")
         location_coords = f"{resolved['latitude']},{resolved['longitude']}"
-        places = self.search_places(location_coords, radius)
+        places = self.search_places(location_coords, radius, type_, max_results)
 
         detailed_places = []
         for place in places:
@@ -147,7 +156,6 @@ class GooglePlacesScraper:
 
         filename = f"leads.{export_format}"
         self.export_data(detailed_places, filename, format_=export_format)
-
         self.show_usage_summary()
 
     def show_usage_summary(self):
@@ -159,9 +167,14 @@ class GooglePlacesScraper:
 
 
 if __name__ == "__main__":
-    api_key = input("Enter your Google Places API Key: ")
-    location_input = input("Enter location name or 'latitude,longitude': ")
-    radius = int(input("Enter radius in meters: "))
-    format_ = input("Export format (csv/json/yaml): ").strip().lower()
+    api_key = input("Enter your Google Places API Key: ").strip()
+    location_input = input("Enter location name or 'latitude,longitude': ").strip()
+    radius = int(input("Enter radius in meters (default 5000): ") or 5000)
+    format_ = input("Export format (csv/json/yaml) [default=csv]: ").strip().lower() or "csv"
+    type_ = input("Enter type of place (default=school): ").strip() or "school"
+    max_results_input = input("Max number of results (leave blank for no limit): ").strip()
+    max_results = int(max_results_input) if max_results_input.isdigit() else None
+
     scraper = GooglePlacesScraper(api_key)
-    scraper.run(location_input, radius, export_format=format_)
+    scraper.run(location_input, radius, export_format=format_, type_=type_, max_results=max_results)
+
